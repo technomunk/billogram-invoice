@@ -1,5 +1,6 @@
-# Data file
-invoices.csv
+# Data and config files
+*.csv
+config.toml
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
