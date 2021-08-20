@@ -1,4 +1,6 @@
-# Billogram invoicing solution test
+# Billogram API tomfoolery
+
+Familiarization with [Billogram API](https://billogram.com/documentation).
 
 ## Usage
 
