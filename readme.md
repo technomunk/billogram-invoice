@@ -11,4 +11,4 @@ Familiarization with [Billogram API](https://billogram.com/documentation).
 	+ `login` with the API user id
 	+ `password` with the API user password
 - Find a csv file with relevant mock customer data
-- Run `python3 invoice.py <csv file>`
+- Run `python3 invoice.py <csv_file>`
