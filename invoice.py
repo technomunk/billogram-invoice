@@ -4,7 +4,6 @@ import argparse
 import asyncio
 import csv
 import re
-from logging import error
 from typing import Sequence, Tuple
 
 import httpx
@@ -18,18 +17,25 @@ EMAIL_RE = re.compile(r"(^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$)")
 PHONE_RE = re.compile(r"0\d{9}")
 
 
-def validate_response(response: httpx.Response, context: str = "") -> bool:
+class InvoiceProcessingError(Exception):
+    """
+    An error happened during invoice processing. Contains the invoice that wasn't processed.
+    """
+    def __init__(self, invoice: dict) -> None:
+        super().__init__()
+        self.invoice = invoice
+
+
+def validate_response(response: httpx.Response, context: str = "") -> None:
     """
     Check that response has status code 200 and print an error if it isn't.
     """
     if response.status_code != 200:
         response_msg = response.json()["data"]["message"]
         if context:
-            print(f"Error while {context}: {response_msg}")
+            raise RuntimeError(f"got {response_msg} while {context}")
         else:
-            print(f"Error: {response_msg}")
-        return False
-    return True
+            raise RuntimeError("god bad response: " + response_msg)
 
 
 def parse_address(rowdata: dict) -> dict:
@@ -128,28 +134,29 @@ async def process_invoice(client: httpx.AsyncClient, invoice: dict, create_custo
     """
     Process a single invoice, populating an entry for it in Billogram and sending it.
     """
-    customer = parse_customer(invoice)
-    customer_name = customer["name"]
-    if create_customer:
-        response = await client.post("/customer", json=customer)
-        if not validate_response(response, "creating customer " + customer_name):
-            return
+    try:
+        customer = parse_customer(invoice)
+        customer_name = customer["name"]
+        if create_customer:
+            response = await client.post("/customer", json=customer)
+            validate_response(response, "creating customer " + customer_name)
 
-    item = parse_item(invoice)
-    sanitize_item(item)
-    billogram = {
-        "invoice_no": invoice["invoice_number"],
-        "customer": {"customer_no": customer["customer_no"]},
-        "items": [item],
-    }
-    response = await client.post("/billogram", json=billogram)
-    if not validate_response(response, "creating invoice for " + customer_name):
-        return
+        item = parse_item(invoice)
+        sanitize_item(item)
+        billogram = {
+            "invoice_no": invoice["invoice_number"],
+            "customer": {"customer_no": customer["customer_no"]},
+            "items": [item],
+        }
+        response = await client.post("/billogram", json=billogram)
+        validate_response(response, "creating invoice for " + customer_name)
 
-    invoice_id = response.json()["data"]["id"]
-    payload = {"method": pick_send_method(customer)}
-    response = await client.post(f"/billogram/{invoice_id}/command/send", json=payload)
-    validate_response(response, "sending invoice to " + customer_name)
+        invoice_id = response.json()["data"]["id"]
+        payload = {"method": pick_send_method(customer)}
+        response = await client.post(f"/billogram/{invoice_id}/command/send", json=payload)
+        validate_response(response, "sending invoice to " + customer_name)
+    except Exception as exc:
+        raise InvoiceProcessingError(invoice) from exc
 
 
 async def process_file_invoices(client: httpx.AsyncClient, filename: str, create_customers: bool) -> None:
@@ -162,8 +169,8 @@ async def process_file_invoices(client: httpx.AsyncClient, filename: str, create
         tasks = (process_invoice(client, invoice, create_customers) for invoice in invoices)
         results = await asyncio.gather(*tasks, return_exceptions=True)
     for result in results:
-        if isinstance(result, Exception):
-            error(result)
+        if isinstance(result, InvoiceProcessingError):
+            print("Failed to process invoice " + result.invoice["invoice_number"])
     print("Processed invoices in " + filename)
 
 
@@ -173,10 +180,7 @@ async def process_invoice_files(filenames: Sequence[str], auth: Tuple[str, str],
     """
     async with httpx.AsyncClient(auth=auth, base_url=base_url, timeout=30) as client:
         tasks = (process_file_invoices(client, filename, create_customers) for filename in filenames)
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-    for result in results:
-        if isinstance(result, Exception):
-            error(result)
+        await asyncio.gather(*tasks)
 
 
 if __name__ == "__main__":
