@@ -1,9 +1,11 @@
 # Playing around to learn Billogram api
 
 import argparse
+import asyncio
 import csv
 import re
-from typing import Iterable
+from logging import error
+from typing import Sequence, Tuple
 
 import httpx
 
@@ -122,34 +124,59 @@ def pick_send_method(customer: dict) -> str:
         return "Letter"
 
 
-def process_invoices(client: httpx.Client, file: Iterable[str], create_customers=False) -> None:
+async def process_invoice(client: httpx.AsyncClient, invoice: dict, create_customer: bool) -> None:
     """
-    Process all invoices present in the provided file.
+    Process a single invoice, populating an entry for it in Billogram and sending it.
     """
-    for row in csv.DictReader(file):
-        customer = parse_customer(row)
-        customer_name = customer["name"]
-        if create_customers:
-            response = client.post("/customer", json=customer)
-            if not validate_response(response, "creating customer " + customer_name):
-                continue
+    customer = parse_customer(invoice)
+    customer_name = customer["name"]
+    if create_customer:
+        response = await client.post("/customer", json=customer)
+        if not validate_response(response, "creating customer " + customer_name):
+            return
 
-        item = parse_item(row)
-        sanitize_item(item)
-        invoice = {
-            "invoice_no": row["invoice_number"],
-            "customer": {"customer_no": customer["customer_no"]},
-            "items": [item],
-        }
-        response = client.post("/billogram", json=invoice)
-        if not validate_response(response, "creating invoice for " + customer_name):
-            continue
+    item = parse_item(invoice)
+    sanitize_item(item)
+    billogram = {
+        "invoice_no": invoice["invoice_number"],
+        "customer": {"customer_no": customer["customer_no"]},
+        "items": [item],
+    }
+    response = await client.post("/billogram", json=billogram)
+    if not validate_response(response, "creating invoice for " + customer_name):
+        return
 
-        invoice_id = response.json()["data"]["id"]
-        payload = {"method": pick_send_method(customer)}
-        response = client.post(f"/billogram/{invoice_id}/command/send", json=payload)
-        if validate_response(response, "sending invoice to " + customer_name):
-            print("Sent invoice to" + customer_name)
+    invoice_id = response.json()["data"]["id"]
+    payload = {"method": pick_send_method(customer)}
+    response = await client.post(f"/billogram/{invoice_id}/command/send", json=payload)
+    validate_response(response, "sending invoice to " + customer_name)
+
+
+async def process_file_invoices(client: httpx.AsyncClient, filename: str, create_customers: bool) -> None:
+    """
+    Process all invoices present in the file with provided name in parallel.
+    """
+    print("Processing invoices in " + filename)
+    with open(filename) as file:
+        invoices = csv.DictReader(file)
+        tasks = (process_invoice(client, invoice, create_customers) for invoice in invoices)
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+    for result in results:
+        if isinstance(result, Exception):
+            error(result)
+    print("Processed invoices in " + filename)
+
+
+async def process_invoice_files(filenames: Sequence[str], auth: Tuple[str, str], create_customers: bool) -> None:
+    """
+    Process invoices in files with provided filenames in parallel.
+    """
+    async with httpx.AsyncClient(auth=auth, base_url=base_url, timeout=30) as client:
+        tasks = (process_file_invoices(client, filename, create_customers) for filename in filenames)
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+    for result in results:
+        if isinstance(result, Exception):
+            error(result)
 
 
 if __name__ == "__main__":
@@ -172,8 +199,4 @@ if __name__ == "__main__":
         exit("Please provide login details in config.toml")
 
     auth = (config["login"], config["password"])
-
-    with httpx.Client(auth=auth, base_url=base_url) as client:
-        for filename in args.files:
-            with open(filename) as file:
-                process_invoices(client, file, create_customers=not args.skip_customers)
+    asyncio.run(process_invoice_files(args.files, auth, not args.skip_customers))
