@@ -3,19 +3,13 @@
 import argparse
 import csv
 import re
-from typing import Dict, Iterable, List, Union
+from typing import Iterable
 
 import httpx
 
 from config import load_config
 
 base_url = "https://sandbox.billogram.com/api/v2"
-
-AddressData = Dict[str, str]
-ContactData = Dict[str, str]
-CustomerData = dict
-ItemData = Dict[str, str]
-InvoiceData = Dict[str, Union[str, CustomerData, List[ItemData], dict]]
 
 # http://emailregex.com
 EMAIL_RE = re.compile(r"(^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$)")
@@ -36,7 +30,7 @@ def validate_response(response: httpx.Response, context: str = "") -> bool:
     return True
 
 
-def parse_address(rowdata: dict) -> AddressData:
+def parse_address(rowdata: dict) -> dict:
     """
     Get primary address information from the provided data row.
     """
@@ -47,7 +41,7 @@ def parse_address(rowdata: dict) -> AddressData:
     }
 
 
-def parse_contact(rowdata: dict) -> ContactData:
+def parse_contact(rowdata: dict) -> dict:
     """
     Get customer contact information from provided data row.
     """
@@ -58,7 +52,7 @@ def parse_contact(rowdata: dict) -> ContactData:
     }
 
 
-def parse_customer(rowdata: dict) -> CustomerData:
+def parse_customer(rowdata: dict) -> dict:
     """
     Get customer information from provided data row.
     """
@@ -72,7 +66,7 @@ def parse_customer(rowdata: dict) -> CustomerData:
     }
 
 
-def parse_item(rowdata: dict) -> ItemData:
+def parse_item(rowdata: dict) -> dict:
     """
     Get credited item information from provided data row.
     """
@@ -82,7 +76,7 @@ def parse_item(rowdata: dict) -> ItemData:
     }
 
 
-def sanitize_item(item: ItemData) -> None:
+def sanitize_item(item: dict) -> None:
     """
     Make sure the item adheres to format expected by Billogram API.
     Fills required fields with default values.
@@ -113,7 +107,7 @@ def is_phone_number(string: str) -> bool:
     return PHONE_RE.fullmatch(string) is not None
 
 
-def pick_send_method(customer: CustomerData) -> str:
+def pick_send_method(customer: dict) -> str:
     """
     Pick a method of sending the Billogram for the provided customer.
 
@@ -128,7 +122,7 @@ def pick_send_method(customer: CustomerData) -> str:
         return "Letter"
 
 
-def process_invoices(client: httpx.Client, file: Iterable[str], create_customers=False):
+def process_invoices(client: httpx.Client, file: Iterable[str], create_customers=False) -> None:
     """
     Process all invoices present in the provided file.
     """
@@ -142,7 +136,7 @@ def process_invoices(client: httpx.Client, file: Iterable[str], create_customers
 
         item = parse_item(row)
         sanitize_item(item)
-        invoice: InvoiceData = {
+        invoice = {
             "invoice_no": row["invoice_number"],
             "customer": {"customer_no": customer["customer_no"]},
             "items": [item],
